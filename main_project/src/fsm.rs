@@ -9,8 +9,6 @@ use strum::IntoEnumIterator;
 impl ElevatorInner {
     async fn new(addr: &str) -> Self {
         let mut driver = Elevator::init(addr, NUM_FLOORS).unwrap();
-
-        // Drive down until a floor sensor is hit to establish a known position
         loop {
             Elevator::motor_direction(&mut driver, DIRN_DOWN);
             if let Some(floor) = Elevator::floor_sensor(&driver) {
@@ -29,6 +27,53 @@ impl ElevatorInner {
             }
         }
     }
+
+    fn update_floor_sensor(&mut self) {
+        if let Some(floor) = Elevator::floor_sensor(&self.driver) {
+            self.prev_floor = floor;
+            Elevator::floor_indicator(&self.driver, floor);
+        }
+    }
+
+    fn stop(&mut self) {
+        self.direction = DIRN_STOP;
+        self.state = ElevState::Idle;
+        self.currently_serving = None;
+        Elevator::motor_direction(&self.driver, DIRN_STOP);
+    }
+
+    fn move_toward(&mut self, target: u8, queue: &[Order]) {
+        self.state = ElevState::WorkingOrder;
+        self.currently_serving = queue.iter().find(|o| o.floor == target).cloned();
+        self.direction = if self.prev_floor < target { DIRN_UP } else { DIRN_DOWN };
+        Elevator::motor_direction(&self.driver, self.direction);
+    }
+
+
+    fn serve_order(&mut self, queue: &mut Vec<Order>) -> Option<Order> {
+        let travel_dir = self.direction;
+        self.state = ElevState::WorkingOrder;
+        Elevator::motor_direction(&self.driver, DIRN_STOP);
+
+        let pos = queue.iter().position(|o| {
+            o.floor == self.prev_floor && match travel_dir {
+                DIRN_UP => o.order_type != ButtonType::HallDown,
+                DIRN_DOWN => o.order_type != ButtonType::HallUp,
+                _ => true,
+            }
+        })?;
+
+        let served = queue.remove(pos);
+        self.currently_serving = None;
+
+        self.direction = if queue.iter().any(|o| match travel_dir {
+            DIRN_UP => o.floor > self.prev_floor,
+            DIRN_DOWN => o.floor < self.prev_floor,
+            _ => false,
+        }) { travel_dir } else { DIRN_STOP };
+
+        Some(served)
+    }
 }
 
 impl ElevatorFSM {
@@ -39,33 +84,22 @@ impl ElevatorFSM {
         }
     }
 
-    pub async fn handle_event(&self, event: Event) {
-        let mut inner = self.inner.lock().await;
-        match (inner.state, event) {
-            (ElevState::Init, _) => inner.state = ElevState::Idle,
-
-            (ElevState::Idle, Event::NewOrder(floor)) => {
-                drop(inner);
-                self.go_to_floor(floor).await;
-                let mut inner = self.inner.lock().await;
-                inner.state = ElevState::WorkingOrder;
+    // Replace the queue with new assignments, preserving the order
+    // currently being executed so it doesn't vanish mid-movement.
+    pub async fn replace_queue(&self, orders: &[Order]) {
+        let serving = self.inner.lock().await.currently_serving.clone();
+        let mut new_queue: Vec<Order> = orders.to_vec();
+        if let Some(ref s) = serving {
+            if !new_queue.contains(s) {
+                new_queue.insert(0, s.clone());
             }
-
-            (ElevState::WorkingOrder, Event::ArrivedAtFloor) => {
-                drop(inner);
-                self.open_door_and_wait().await;
-                let mut inner = self.inner.lock().await;
-                inner.state = ElevState::Idle;
-            }
-
-            _ => return,
         }
+        *self.queue.lock().await = new_queue;
     }
 
     pub async fn poll_buttons(&self) -> Vec<Order> {
-        let mut pressed = Vec::new();
         let inner = self.inner.lock().await;
-
+        let mut pressed = Vec::new();
         for floor in 0..NUM_FLOORS {
             for button in ButtonType::iter() {
                 if Elevator::call_button(&inner.driver, floor, button as u8) {
@@ -113,16 +147,14 @@ impl ElevatorFSM {
 
             sleep(Duration::from_millis(100)).await;
         }
-    }
 
-    pub async fn get_state(&self) -> (u8, u8, Behaviour) {
-        let inner = self.inner.lock().await;
-        let behaviour = match inner.state {
-            ElevState::WorkingOrder if inner.direction == DIRN_STOP => Behaviour::DoorOpen,
-            ElevState::WorkingOrder => Behaviour::Moving,
-            _ => Behaviour::Idle,
-        };
-        (inner.prev_floor, inner.direction, behaviour)
+        // Fallback: if no direction-compatible order found, pick closest
+        best.unwrap_or_else(|| {
+            queue.iter()
+                .map(|o| o.floor)
+                .min_by_key(|&f| dist(f))
+                .unwrap_or(current_floor)
+        })
     }
 
     pub async fn process_next_order(&self) -> Option<Order> {
@@ -136,11 +168,13 @@ impl ElevatorFSM {
             }
         };
 
-        if let Some(order) = order {
-            {
-                let mut inner = self.inner.lock().await;
-                inner.state = ElevState::WorkingOrder;
-                inner.currently_serving = Some(order.clone());
+            let mut inner = self.inner.lock().await;
+            inner.update_floor_sensor();
+
+            let mut queue = self.queue.lock().await;
+            if queue.is_empty() {
+                inner.stop();
+                return None;
             }
 
             let actual_floor = self.go_to_floor(order.floor).await;
@@ -168,28 +202,42 @@ impl ElevatorFSM {
             
             self.open_door_and_wait().await;
 
-            {
-                let mut inner = self.inner.lock().await;
-                inner.state = ElevState::Idle;
-                inner.currently_serving = None;
-            }
-            return Some(served_order);
+            println!(
+                "[FSM] Served f{} {:?} | queue: {:?}",
+                served.floor,
+                served.order_type,
+                queue.iter().map(|x| x.floor).collect::<Vec<_>>()
+            );
+
+            drop(queue);
+            drop(inner);
+            self.open_door_and_wait().await;
+            self.inner.lock().await.state = ElevState::Idle;
+
+            return Some(served);
         }
-        None
+    }
+
+    pub async fn get_state(&self) -> (u8, u8, Behaviour) {
+        let inner = self.inner.lock().await;
+        let behaviour = match inner.state {
+            ElevState::WorkingOrder if inner.direction == DIRN_STOP => Behaviour::DoorOpen,
+            ElevState::WorkingOrder                                 => Behaviour::Moving,
+            _                                                       => Behaviour::Idle,
+        };
+        (inner.prev_floor, inner.direction, behaviour)
     }
 
     pub async fn open_door_and_wait(&self) {
-        {
-            let inner = self.inner.lock().await;
-            Elevator::door_light(&inner.driver, true);
-        }
+        let inner = self.inner.lock().await;
+        Elevator::door_light(&inner.driver, true);
+        drop(inner);
         sleep(Duration::from_secs(3)).await;
-        // After the mandatory 3-second open period, wait until obstruction clears
         loop {
             let inner = self.inner.lock().await;
             if !Elevator::obstruction(&inner.driver) {
                 Elevator::door_light(&inner.driver, false);
-                break;
+                return;
             }
             drop(inner);
             sleep(Duration::from_millis(40)).await;
@@ -198,10 +246,9 @@ impl ElevatorFSM {
 
     pub async fn set_button_light(&self, external_orders: &[Order], internal_orders: &[Order]) {
         let inner = self.inner.lock().await;
-
         for floor in 0..NUM_FLOORS {
             for button in ButtonType::iter() {
-                let active = external_orders.iter().chain(internal_orders.iter())
+                let active = external_orders.iter().chain(internal_orders)
                     .any(|o| o.floor == floor && o.order_type == button);
                 Elevator::call_button_light(&inner.driver, floor, button as u8, active);
             }

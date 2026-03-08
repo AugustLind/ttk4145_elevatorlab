@@ -8,6 +8,7 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use tokio::time::Instant;
 
+use driver_rust::elevio::elev::{DIRN_DOWN, DIRN_STOP, DIRN_UP};
 use std::sync::Arc;
 
 impl RequestAssigner {
@@ -124,10 +125,10 @@ impl RequestAssigner {
             behaviour: heartbeat.status.clone(),
             floor: heartbeat.floor,
             direction: match heartbeat.direction {
-                0 => Direction::Stop,
-                1 => Direction::Up,
-                2 => Direction::Down,
-                _ => Direction::Stop,
+                DIRN_STOP => Direction::Stop,
+                DIRN_UP   => Direction::Up,
+                DIRN_DOWN => Direction::Down,
+                _         => Direction::Stop,
             },
             cab_requests: cab,
         };

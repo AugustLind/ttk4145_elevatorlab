@@ -80,7 +80,7 @@ impl Heartbeat {
     }
 
 
-    pub async fn network_controller(&mut self) {
+    pub async fn network_controller(&self) {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         self.tx_udp.send(self.msg.clone()).unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
