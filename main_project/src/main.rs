@@ -49,10 +49,19 @@ async fn main() {
     let mut request_assigner =
         RequestAssigner::new(network.id().to_string(), Roles::Slave, message);
 
-    // One-time cab order recovery on startup: wait for one round of gossip
-    // before broadcasting our own state, so peers still have our pre-crash cabs.
+    // One-time cab order recovery on startup: keep broadcasting and listening
+    // until we hear from at least one peer (up to 5 seconds, then give up).
     {
-        let gossip = network.collect_gossip_heartbeats().await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        let mut gossip = Vec::new();
+        while tokio::time::Instant::now() < deadline {
+            network.network_controller().await;
+            gossip = network.collect_gossip_heartbeats().await;
+            if !gossip.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
         request_assigner.recover_cab_orders_from_gossip(&gossip, &mut network);
     }
 
