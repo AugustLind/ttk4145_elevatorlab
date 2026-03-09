@@ -82,9 +82,7 @@ impl Heartbeat {
 
 
     pub async fn network_controller(&self) {
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         self.tx_udp.send(self.msg.clone()).unwrap();
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     }
 
 
@@ -92,7 +90,7 @@ impl Heartbeat {
         let mut heartbeats: std::collections::HashMap<String, HeartbeatMSG> = std::collections::HashMap::new();
         let mut rx = self.tx_broadcast.subscribe();
         
-        let timeout_duration = std::time::Duration::from_millis(50);
+        let timeout_duration = std::time::Duration::from_millis(30);
         let start = std::time::Instant::now();
         
         while start.elapsed() < timeout_duration {
