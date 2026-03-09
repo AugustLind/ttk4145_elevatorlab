@@ -90,7 +90,7 @@ impl Heartbeat {
         let mut heartbeats: std::collections::HashMap<String, HeartbeatMSG> = std::collections::HashMap::new();
         let mut rx = self.tx_broadcast.subscribe();
         
-        let timeout_duration = std::time::Duration::from_millis(30);
+        let timeout_duration = std::time::Duration::from_millis(50);
         let start = std::time::Instant::now();
         
         while start.elapsed() < timeout_duration {

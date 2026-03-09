@@ -373,6 +373,11 @@ impl RequestAssigner {
                 all_my_orders.push(cab_order.clone());
             }
         }
+
+        // Don't re-enqueue an order we just completed (gossip hasn't propagated yet)
+        if let Some(cleared) = &network.msg.cleared_order {
+            all_my_orders.retain(|o| o != cleared);
+        }
         
         self.enqueue_orders(&fsm, &all_my_orders).await;
         
@@ -392,6 +397,11 @@ impl RequestAssigner {
                 if !all_my_orders.contains(cab_order) {
                     all_my_orders.push(cab_order.clone());
                 }
+            }
+
+            // Don't re-enqueue an order we just completed (master hasn't seen our cleared_order yet)
+            if let Some(cleared) = &network.msg.cleared_order {
+                all_my_orders.retain(|o| o != cleared);
             }
 
             self.enqueue_orders(&fsm, &all_my_orders).await;
