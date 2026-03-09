@@ -8,12 +8,12 @@ use strum::IntoEnumIterator;
 
 impl ElevatorInner {
     async fn new(addr: &str) -> Self {
-        let mut driver = Elevator::init(addr, NUM_FLOORS).unwrap();
+        let driver = Elevator::init(addr, NUM_FLOORS).unwrap();
+        Elevator::motor_direction(&driver, DIRN_DOWN);
         loop {
-            Elevator::motor_direction(&mut driver, DIRN_DOWN);
             if let Some(floor) = Elevator::floor_sensor(&driver) {
-                Elevator::motor_direction(&mut driver, DIRN_STOP);
-                Elevator::floor_indicator(&mut driver, floor);
+                Elevator::motor_direction(&driver, DIRN_STOP);
+                Elevator::floor_indicator(&driver, floor);
 
                 for f in 0..NUM_FLOORS {
                     for btn in 0..3u8 {
@@ -21,22 +21,19 @@ impl ElevatorInner {
                     }
                 }
 
-                while Elevator::obstruction(&driver) {sleep(Duration::from_millis(100)).await;};
+                while Elevator::obstruction(&driver) { sleep(Duration::from_millis(100)).await; }
 
                 Elevator::door_light(&driver, false);
 
-
                 return Self {
-                    obstruction: Elevator::obstruction(&driver),
                     driver,
                     prev_floor: floor,
                     direction: DIRN_STOP,
-                    elev_id: addr.to_string(),
                     state: ElevState::Init,
-                    last_received_msg_counter: 0,
                     currently_serving: None,
                 };
             }
+            sleep(Duration::from_millis(20)).await;
         }
     }
 
@@ -109,62 +106,29 @@ impl ElevatorFSM {
         pressed
     }
 
-    fn get_next_order(queue: &[Order], current_floor: u8, direction: u8) -> u8 {
-        let dist = |f: u8| (f as i16 - current_floor as i16).abs();
-        let mut best: Option<u8> = None;
+    fn get_next_order(queue: &[Order], current: u8, direction: u8) -> u8 {
+        let dist = |f: u8| (f as i16 - current as i16).unsigned_abs();
 
-        for order in queue {
-            let floor = order.floor;
-
-            let dominated = |f: u8| match best {
-                None => true,
-                Some(b) => match direction {
-                    DIRN_UP => f < b || b < current_floor,
-                    DIRN_DOWN => f > b || b > current_floor,
-                    _ => dist(f) < dist(b),
-                },
+        // Pick the best order compatible with current direction:
+        // DIRN_UP:   nearest ahead, skipping HallDown
+        // DIRN_DOWN: nearest ahead (going down), skipping HallUp
+        // DIRN_STOP: nearest overall
+        let best = queue.iter().filter_map(|o| {
+            let skip = match direction {
+                DIRN_UP   => o.floor < current || o.order_type == ButtonType::HallDown,
+                DIRN_DOWN => o.floor > current || o.order_type == ButtonType::HallUp,
+                _         => false,
             };
-
-            match direction {
-                DIRN_UP => {
-                    // Skip floors behind us
-                    if floor < current_floor { continue; }
-                    // At current floor: only stop for CabCall or HallUp
-                    if floor == current_floor && order.order_type == ButtonType::HallDown {
-                        continue;
-                    }
-                    // Ahead: skip HallDown (passenger wants to go down)
-                    if floor > current_floor && order.order_type == ButtonType::HallDown {
-                        continue;
-                    }
-                    if dominated(floor) { best = Some(floor); }
-                }
-
-                DIRN_DOWN => {
-                    if floor > current_floor { continue; }
-                    if floor == current_floor && order.order_type == ButtonType::HallUp {
-                        continue;
-                    }
-                    if floor < current_floor && order.order_type == ButtonType::HallUp {
-                        continue;
-                    }
-                    if dominated(floor) { best = Some(floor); }
-                }
-
-                DIRN_STOP => {
-                    if dominated(floor) { best = Some(floor); }
-                }
-
-                _ => {}
-            }
-        }
+            if skip { None } else { Some(o.floor) }
+        }).min_by_key(|&f| match direction {
+            DIRN_UP   => f as i16,
+            DIRN_DOWN => -(f as i16),
+            _         => dist(f) as i16,
+        });
 
         // Fallback: if no direction-compatible order found, pick closest
         best.unwrap_or_else(|| {
-            queue.iter()
-                .map(|o| o.floor)
-                .min_by_key(|&f| dist(f))
-                .unwrap_or(current_floor)
+            queue.iter().map(|o| o.floor).min_by_key(|&f| dist(f)).unwrap_or(current)
         })
     }
 

@@ -12,13 +12,7 @@ use strum_macros::EnumIter;
 pub enum ElevState {
     Init,
     WorkingOrder,
-    Crashed,
     Idle,
-}
-
-pub enum Event {
-    NewOrder(u8),
-    ArrivedAtFloor,
 }
 
 pub enum OrderResult {
@@ -45,12 +39,9 @@ use tokio::sync::Mutex;
 
 pub struct ElevatorInner {
     pub driver: Elevator,
-    pub obstruction: bool,
     pub prev_floor: u8,
     pub direction: u8,
-    pub elev_id: String,
     pub state: ElevState,
-    pub last_received_msg_counter: i32,
     pub currently_serving: Option<Order>,
 }
 

@@ -31,7 +31,7 @@ impl RequestAssigner {
         let child = Command::new("./hall_request_assigner")
             .arg("--input")
             .arg(&json_str)
-            .arg("--includeCab") // behold som du har (da får vi 3 kolonner)
+            .arg("--includeCab") // include cab requests so output has 3 columns per floor
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -84,11 +84,7 @@ impl RequestAssigner {
     }
 
 
-    pub fn build_message_from_gossip(
-        &mut self,
-        _gossip: &[HeartbeatMSG],  // No longer used directly
-        own_heartbeat: &HeartbeatMSG,
-    ) {
+    pub fn build_message_from_gossip(&mut self, own_heartbeat: &HeartbeatMSG) {
         let num_floors = crate::config::NUM_FLOORS as usize;
 
         self.message.states.clear();
@@ -98,14 +94,13 @@ impl RequestAssigner {
         self.insert_state_from_heartbeat(own_heartbeat, num_floors);
         self.merge_external_orders(own_heartbeat, num_floors);
         
-        // Include all peers that are still alive (using cached states)
-        // Clone to avoid borrow conflict
+        // Include all live peers (using cached states; clone to avoid borrow conflict)
         let peer_states: Vec<_> = self.peer_states
-            .iter()
-            .filter(|(id, _)| *id != &self.id)
-            .map(|(_, hb)| hb.clone())
+            .values()
+            .filter(|hb| hb.id != self.id)
+            .cloned()
             .collect();
-            
+
         for heartbeat in &peer_states {
             self.insert_state_from_heartbeat(heartbeat, num_floors);
             self.merge_external_orders(heartbeat, num_floors);
@@ -258,54 +253,27 @@ impl RequestAssigner {
         network: &mut Heartbeat,
         fsm: Arc<ElevatorFSM>,
     ) {
-        let my_id = network.msg.id.clone();
-        
-        // First: Remove orders marked as completed in heartbeats (BEFORE aggregating!)
-        for heartbeat in gossip {
-            if let Some(cleared) = &heartbeat.cleared_order {
-                // External (hall) orders: clear from everyone
-                network.msg.external_orders.retain(|order| order != cleared);
-                
-                // Internal (cab) orders: only clear if it's MY elevator's cleared order
-                // Other elevators' cabs shouldn't affect my cabs
-                if heartbeat.id == my_id {
-                    network.msg.internal_orders.retain(|order| order != cleared);
-                }
-                
-                // Clear from cached peer_states (only external orders)
-                for (_, cached_hb) in self.peer_states.iter_mut() {
-                    cached_hb.external_orders.retain(|o| o != cleared);
-                }
-                // Clear from assignments too
-                for (_id, orders) in network.msg.assignments.iter_mut() {
-                    orders.retain(|o| o != cleared);
-                }
-                // Clear from last_published_assignments too
-                for (_id, orders) in self.last_published_assignments.iter_mut() {
-                    orders.retain(|o| o != cleared);
-                }
-            }
-        }
-        
-        // Also check own completed orders
-        if let Some(cleared) = &network.msg.cleared_order {
-            network.msg.external_orders.retain(|order| order != cleared);
-            network.msg.internal_orders.retain(|order| order != cleared);
-            // Clear from cached peer_states
-            for (_, cached_hb) in self.peer_states.iter_mut() {
+        // Collect all cleared orders (from peers + self) and remove them from
+        // master-specific tracking structures (external/internal already cleared
+        // by clear_completed_orders_from_gossip and order_completed).
+        let all_cleared: Vec<Order> = std::iter::once(&network.msg)
+            .chain(gossip.iter())
+            .filter_map(|hb| hb.cleared_order.clone())
+            .collect();
+
+        for cleared in &all_cleared {
+            for cached_hb in self.peer_states.values_mut() {
                 cached_hb.external_orders.retain(|o| o != cleared);
             }
-            // Clear from assignments
-            for (_id, orders) in network.msg.assignments.iter_mut() {
+            for orders in network.msg.assignments.values_mut() {
                 orders.retain(|o| o != cleared);
             }
-            // Clear from last_published_assignments too
-            for (_id, orders) in self.last_published_assignments.iter_mut() {
+            for orders in self.last_published_assignments.values_mut() {
                 orders.retain(|o| o != cleared);
             }
         }
 
-        self.build_message_from_gossip(gossip, &network.msg);
+        self.build_message_from_gossip(&network.msg);
         
         // Collect orders that are already assigned to someone
         let already_assigned: Vec<Order> = self.last_published_assignments
@@ -346,7 +314,7 @@ impl RequestAssigner {
         // Merge new assignments with existing ones
         let mut merged_assignments = self.last_published_assignments.clone();
         for (id, new_orders) in new_assignments {
-            let entry = merged_assignments.entry(id).or_insert_with(Vec::new);
+            let entry = merged_assignments.entry(id).or_default();
             for order in new_orders {
                 if !entry.contains(&order) {
                     entry.push(order);
