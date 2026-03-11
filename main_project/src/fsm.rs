@@ -262,9 +262,9 @@ impl ElevatorFSM {
     }
 
     pub async fn log_queue(&self) {
-        let q = self.queue.lock().await;
-        let contents: Vec<String> = q.iter().map(|o| format!("f{} {:?}", o.floor, o.order_type)).collect();
-        println!("[FSM] queue ({}): [{}]", q.len(), contents.join(", "));
+        let queue = self.queue.lock().await;
+        let contents: Vec<String> = queue.iter().map(|o| format!("f{} {:?}", o.floor, o.order_type)).collect();
+        println!("[FSM] queue ({}): [{}]", queue.len(), contents.join(", "));
     }
 
     pub async fn set_button_light(&self, hall_orders: &[Order], cab_orders: &[Order]) {

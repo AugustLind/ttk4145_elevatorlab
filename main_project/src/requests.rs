@@ -53,10 +53,10 @@ impl RequestAssigner {
             return HashMap::new();
         }
 
-        let raw: HashMap<String, Vec<Vec<bool>>> = serde_json::from_slice(&output.stdout).unwrap();
-        println!("[ASSIGNER] Raw output: {:?}", raw);
+        let raw_json_assignments: HashMap<String, Vec<Vec<bool>>> = serde_json::from_slice(&output.stdout).unwrap();
+        println!("[ASSIGNER] Raw output: {:?}", raw_json_assignments);
 
-        let assignments = raw.into_iter().map(|(id, per_floor)| {
+        let assignments = raw_json_assignments.into_iter().map(|(id, per_floor)| {
             let orders = per_floor.iter().enumerate().flat_map(|(floor, cols)| {
                 [
                     (cols.get(0), ButtonType::HallUp),
@@ -169,9 +169,9 @@ impl RequestAssigner {
             }
         }
 
-        let mut q = fsm.queue.lock().await;
-        if *q != new_queue {
-            *q = new_queue;
+        let mut queue = fsm.queue.lock().await;
+        if *queue != new_queue {
+            *queue = new_queue;
         }
     }
 
@@ -221,7 +221,7 @@ impl RequestAssigner {
     }
 
 
-    pub async fn master(&mut self, gossip: &[GossipMsg], network: &mut Network, fsm: Arc<ElevatorFSM>) {
+    pub async fn master_execute_tasks(&mut self, gossip: &[GossipMsg], network: &mut Network, fsm: Arc<ElevatorFSM>) {
         // Remove completed orders from master-specific tracking structures.
         // (hall_orders / cab_orders on network.state are already cleared by
         //  clear_completed_orders_from_gossip and order_completed before we get here.)
@@ -296,7 +296,7 @@ impl RequestAssigner {
     }
 
 
-    pub async fn slave(&mut self, gossip: &[GossipMsg], network: &mut Network, fsm: Arc<ElevatorFSM>) {
+    pub async fn slave_execute_tasks(&mut self, gossip: &[GossipMsg], network: &mut Network, fsm: Arc<ElevatorFSM>) {
         let cleared = network.collect_cleared_orders(gossip);
         let not_cleared = |o: &&Order| !cleared.contains(o);
 

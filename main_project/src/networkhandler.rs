@@ -90,23 +90,23 @@ impl Network {
 
     /// Collect the latest state from each peer (50 ms window, deduped by counter).
     pub async fn collect_gossip(&self) -> Vec<GossipMsg> {
-        let mut by_id: HashMap<String, GossipMsg> = HashMap::new();
+        let mut gossip_by_id: HashMap<String, GossipMsg> = HashMap::new();
         let mut rx = self.incoming.subscribe();
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
         while std::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(10), rx.recv()).await {
                 Ok(Ok(msg)) if msg.id != self.state.id => {
-                    let better = by_id.get(&msg.id).map_or(true, |e| msg.counter > e.counter);
+                    let better = gossip_by_id.get(&msg.id).map_or(true, |e| msg.counter > e.counter);
                     if better {
-                        by_id.insert(msg.id.clone(), msg);
+                        gossip_by_id.insert(msg.id.clone(), msg);
                     }
                 }
                 _ => {}
             }
         }
 
-        by_id.into_values().collect()
+        gossip_by_id.into_values().collect()
     }
 
 
