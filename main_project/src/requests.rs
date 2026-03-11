@@ -27,8 +27,6 @@ impl RequestAssigner {
         }
     }
 
-    /// Run the external hall_request_assigner binary and parse its output into
-    /// a map from elevator ID to assigned orders.
     async fn assign_hall_orders(&self) -> HashMap<String, Vec<Order>> {
         let json_str = serde_json::to_string_pretty(&self.message).unwrap();
         println!("[ASSIGNER] Input: {}", json_str);
