@@ -198,10 +198,7 @@ impl ElevatorFSM {
 
             // At target — serve order
             let Some(served) = inner.serve_order(&mut queue) else {
-                // No direction-compatible order at this floor (e.g. only HallDown
-                // while going up). Reset to DIRN_STOP so the next iteration uses
-                // the DIRN_STOP branch in get_next_order, which matches any order
-                // type and will serve the order on the next pass.
+
                 inner.direction = DIRN_STOP;
                 continue;
             };
