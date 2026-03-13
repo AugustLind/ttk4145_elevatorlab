@@ -114,4 +114,5 @@ pub struct RequestAssigner {
     pub last_seen: HashMap<String, Instant>,
     pub cached_peers: HashMap<String, GossipMsg>,
     pub peer_ttl: Duration,
+    pub new_peer_joined: bool,
 }

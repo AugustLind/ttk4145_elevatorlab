@@ -18,6 +18,7 @@ impl RequestAssigner {
             last_seen: HashMap::new(),
             cached_peers: HashMap::new(),
             peer_ttl: config::MASTER_ELECTION_TIMEOUT,
+            new_peer_joined: false,
         }
     }
 
@@ -161,6 +162,9 @@ impl RequestAssigner {
 
         self.last_seen.insert(self.id.clone(), now);
         for peer in &gossip {
+            if !self.last_seen.contains_key(&peer.id) {
+                self.new_peer_joined = true;
+            }
             self.last_seen.insert(peer.id.clone(), now);
             self.cached_peers.insert(peer.id.clone(), peer.clone());
         }
@@ -237,7 +241,7 @@ impl RequestAssigner {
             self.cached_peers.len(), self.message.hall_requests);
 
         let has_new_hall_orders = self.message.hall_requests.iter().any(|r| r[0] || r[1]);
-        let new_assignments = if has_new_hall_orders {
+        let new_assignments = if has_new_hall_orders || self.new_peer_joined {
             self.assign_hall_orders().await
         } else {
             HashMap::new()
@@ -256,6 +260,7 @@ impl RequestAssigner {
             network.state.assignments = merged;
             network.state.counter += 1;
         }
+        self.new_peer_joined = false;
 
         let my_id = network.id().to_string();
         let hall_assigned = network.state.assignments.get(&my_id).cloned().unwrap_or_default();
