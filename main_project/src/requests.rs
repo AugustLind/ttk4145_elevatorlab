@@ -235,7 +235,9 @@ impl RequestAssigner {
     pub async fn run_as_master(&mut self, gossip: &[GossipMsg], network: &mut Network, fsm: Arc<ElevatorGuard>) {
         self.remove_cleared_from_tracking(gossip, network);
         self.build_cost_input(&network.state);
-        self.mask_assigned_orders();
+        if !self.new_peer_joined {
+            self.mask_assigned_orders();
+        }
 
         println!("[MASTER] peers: {} | unassigned hall_requests: {:?}",
             self.cached_peers.len(), self.message.hall_requests);
